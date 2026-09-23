@@ -4,10 +4,12 @@ import static java.lang.String.format;
 import static uk.gov.moj.cp.ai.index.IndexConstants.ID;
 import static uk.gov.moj.cp.ai.util.StringUtil.escapeODataStringLiteral;
 
+import uk.gov.moj.cp.ai.index.SearchFieldMapper;
 import uk.gov.moj.cp.ai.model.ChunkedEntry;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -17,11 +19,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 
-import com.azure.core.util.Context;
 import com.azure.search.documents.SearchClient;
 import com.azure.search.documents.models.SearchOptions;
+import com.azure.search.documents.models.SearchPagedIterable;
+import com.azure.search.documents.models.SearchPagedResponse;
 import com.azure.search.documents.models.SearchResult;
-import com.azure.search.documents.util.SearchPagedIterable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -286,6 +288,7 @@ final class IndexCopier {
      */
     List<ChunkedEntry> readPage(final Shard shard, final String lastId) {
         final SearchOptions options = new SearchOptions()
+                .setSearchText("*")
                 .setTop(pageSize)
                 .setOrderBy(ID + " asc"); // requires id sortable
         final String filter = shard.pageFilter(lastId);
@@ -293,10 +296,10 @@ final class IndexCopier {
             options.setFilter(filter); // requires id filterable
         }
 
-        final SearchPagedIterable results = source.search("*", options, Context.NONE);
+        final SearchPagedIterable results = source.search(options);
         final List<ChunkedEntry> page = new ArrayList<>(pageSize);
         for (final SearchResult result : results) {
-            page.add(result.getDocument(ChunkedEntry.class));
+            page.add(SearchFieldMapper.toChunkedEntry(result.getAdditionalProperties()));
         }
         return page;
     }
@@ -314,10 +317,16 @@ final class IndexCopier {
             return 0;
         }
         final SearchOptions options = new SearchOptions()
+                .setSearchText("*")
                 .setFilter(format("%s le '%s'", ID, escapeODataStringLiteral(startAfterId)))
                 .setTop(0)
                 .setIncludeTotalCount(true);
-        final Long count = source.search("*", options, Context.NONE).getTotalCount();
+        // The total count now lives on the page rather than the iterable, so read the first page directly.
+        final Iterator<SearchPagedResponse> pages = source.search(options).iterableByPage().iterator();
+        if (!pages.hasNext()) {
+            return 0;
+        }
+        final Long count = pages.next().getCount();
         return count == null ? 0 : count;
     }
 

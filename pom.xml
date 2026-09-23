@@ -129,14 +129,12 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
-            <!-- Pin azure-search-documents to 11.8.1 (latest 11.x patch): azure-sdk-bom 1.3.8 manages
-                 12.0.1, a breaking redesign (SearchDocument / SearchResult.getDocument / uploadDocuments
-                 all removed). Held on the 11.x line to avoid that rewrite; the 11->12 migration is a
-                 separate, integration-tested change. Resolves fine against the BOM's newer azure-core. -->
+            <!-- Pin azure-search-documents ahead of azure-sdk-bom 1.3.8, which manages 12.0.1.
+                 The 11->12 breaking migration is done; 12.0.2 is the latest patch on that line. -->
             <dependency>
                 <groupId>com.azure</groupId>
                 <artifactId>azure-search-documents</artifactId>
-                <version>11.8.1</version>
+                <version>12.0.2</version>
             </dependency>
             <!-- Keep the telemetry dependency in sync wth azure SDK bom version-->
             <dependency>

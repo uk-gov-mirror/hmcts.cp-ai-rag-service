@@ -1,6 +1,7 @@
 package uk.gov.moj.cp.migration.index;
 
 import static java.lang.String.format;
+import static uk.gov.moj.cp.ai.index.IndexConstants.ID;
 
 import uk.gov.moj.cp.ai.client.config.ClientConfiguration;
 import uk.gov.moj.cp.ai.model.ChunkedEntry;
@@ -11,10 +12,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
 
-import com.azure.core.util.serializer.TypeReference;
 import com.azure.json.JsonProviders;
-import com.azure.search.documents.SearchClientBuilder;
 import com.azure.search.documents.SearchIndexingBufferedSender;
+import com.azure.search.documents.SearchIndexingBufferedSenderBuilder;
+import com.azure.search.documents.SearchServiceVersion;
 import com.azure.search.documents.indexes.SearchIndexClient;
 import com.azure.search.documents.indexes.SearchIndexClientBuilder;
 import com.azure.search.documents.indexes.models.SearchIndex;
@@ -38,10 +39,17 @@ final class SearchIndexAdmin {
     private SearchIndexAdmin() {
     }
 
+    /**
+     * REST api-version pinned to the one the source/target indexes were built and queried under, so the
+     * schema round-trip through {@code createOrUpdateIndex} cannot pick up newer api-version defaults.
+     */
+    private static final SearchServiceVersion SERVICE_VERSION = SearchServiceVersion.V2025_09_01;
+
     static SearchIndexClient indexClient(final String endpoint) {
         return new SearchIndexClientBuilder()
                 .endpoint(endpoint)
                 .credential(CredentialUtil.getCredentialInstance())
+                .serviceVersion(SERVICE_VERSION)
                 .retryOptions(ClientConfiguration.getRetryOptions())
                 .httpClient(ClientConfiguration.createNettyClient())
                 .buildClient();
@@ -52,14 +60,16 @@ final class SearchIndexAdmin {
                                                                      final int initialBatchActionCount,
                                                                      final AtomicLong succeeded,
                                                                      final AtomicLong failed) {
-        return new SearchClientBuilder()
+        return new SearchIndexingBufferedSenderBuilder<ChunkedEntry>()
                 .endpoint(endpoint)
                 .indexName(indexName)
                 .credential(CredentialUtil.getCredentialInstance())
+                .serviceVersion(SERVICE_VERSION)
                 .retryOptions(ClientConfiguration.getRetryOptions())
                 .httpClient(ClientConfiguration.createNettyClient())
-                .bufferedSender(TypeReference.createInstance(ChunkedEntry.class))
-                .documentKeyRetriever(ChunkedEntry::id)
+                // The sender keys documents off the raw action body, not the typed entry: the uploader
+                // hands it explicit IndexActions so no document serializer is involved at all.
+                .documentKeyRetriever(document -> (String) document.get(ID))
                 .initialBatchActionCount(initialBatchActionCount)
                 .maxRetriesPerAction(MAX_RETRIES_PER_ACTION)
                 .autoFlushInterval(AUTO_FLUSH_INTERVAL)

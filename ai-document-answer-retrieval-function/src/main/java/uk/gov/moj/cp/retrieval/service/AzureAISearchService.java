@@ -12,6 +12,7 @@ import static uk.gov.moj.cp.ai.util.StringUtil.isNullOrEmpty;
 
 import uk.gov.moj.cp.ai.client.AISearchClientFactory;
 import uk.gov.moj.cp.ai.index.IndexConstants;
+import uk.gov.moj.cp.ai.index.SearchFieldMapper;
 import uk.gov.moj.cp.ai.model.ChunkedEntry;
 import uk.gov.moj.cp.ai.model.KeyValuePair;
 import uk.gov.moj.cp.retrieval.exception.SearchServiceException;
@@ -22,14 +23,12 @@ import uk.gov.moj.cp.retrieval.service.filter.DiversificationService;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.azure.core.util.Context;
 import com.azure.search.documents.SearchClient;
 import com.azure.search.documents.models.QueryType;
 import com.azure.search.documents.models.SearchOptions;
+import com.azure.search.documents.models.SearchPagedIterable;
 import com.azure.search.documents.models.SearchResult;
-import com.azure.search.documents.models.VectorSearchOptions;
 import com.azure.search.documents.models.VectorizedQuery;
-import com.azure.search.documents.util.SearchPagedIterable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -92,15 +91,14 @@ public class AzureAISearchService {
         final VectorizedQuery vectorizedQuery = new VectorizedQuery(
                 vectorizedUserQuery.stream().collect(ArrayList::new, ArrayList::add, ArrayList::addAll)
         )
-                .setKNearestNeighborsCount(nearestNeighborsCount) // Number of nearest neighbors to retrieve
+                .setKNearestNeighbors(nearestNeighborsCount) // Number of nearest neighbors to retrieve
                 .setFields(IndexConstants.CHUNK_VECTOR);
-
-        final VectorSearchOptions vectorSearchOptions = new VectorSearchOptions().setQueries(List.of(vectorizedQuery));
 
         // 3. Define SearchOptions
         final SearchOptions searchOptions = new SearchOptions()
+                .setSearchText(escapeLuceneSpecialChars(userQuery)) // Keyword leg of the hybrid query
                 .setFilter(filterExpression) // Apply the OData filter
-                .setVectorSearchOptions(vectorSearchOptions) // Add the vector query
+                .setVectorQueries(vectorizedQuery) // Add the vector query
                 .setQueryType(QueryType.FULL) // Use SEMANTIC for hybrid search with semantic ranking
                 .setSelect(getColumnsToRetrieve(clientId)) // Select all fields needed for LLM context and citation
                 .setTop(topResultsCount); // Number of top results to return after filtering and ranking
@@ -108,14 +106,12 @@ public class AzureAISearchService {
 
         // 4. Execute the search
         try {
-            final String escapedUserQuery = escapeLuceneSpecialChars(userQuery);
-            final SearchPagedIterable searchResults = searchClient.search(escapedUserQuery, searchOptions, Context.NONE);
+            final SearchPagedIterable searchResults = searchClient.search(searchOptions);
 
             final List<ChunkedEntry> chunkedEntries = new ArrayList<>();
             for (final SearchResult result : searchResults) {
                 // Get the full document map for each chunk
-                ChunkedEntry chunkedEntry = result.getDocument(ChunkedEntry.class);
-                chunkedEntries.add(chunkedEntry);
+                chunkedEntries.add(SearchFieldMapper.toChunkedEntry(result.getAdditionalProperties()));
             }
             LOGGER.info("Successfully retrieved {}  documents from Azure AI Search.", chunkedEntries.size());
 

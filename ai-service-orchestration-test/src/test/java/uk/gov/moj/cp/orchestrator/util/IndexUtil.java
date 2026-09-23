@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 import com.azure.json.JsonProviders;
+import com.azure.search.documents.SearchServiceVersion;
 import com.azure.search.documents.indexes.SearchIndexClient;
 import com.azure.search.documents.indexes.SearchIndexClientBuilder;
 import com.azure.search.documents.indexes.models.SearchIndex;
@@ -50,6 +51,10 @@ public class IndexUtil {
         return new SearchIndexClientBuilder()
                 .endpoint(endpoint)
                 .credential(getCredentialInstance())
+                // createOrUpdateIndex round-trips the schema JSON, so the api-version is pinned to the one
+                // the production indexes are built under — otherwise a newer default could introduce
+                // api-version-only defaults into the per-run test index.
+                .serviceVersion(SearchServiceVersion.V2025_09_01)
                 .buildClient();
     }
 

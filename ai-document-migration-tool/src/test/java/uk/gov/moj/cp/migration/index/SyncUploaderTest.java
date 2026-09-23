@@ -63,7 +63,7 @@ class SyncUploaderTest {
         when(batchResult.getResults()).thenReturn(List.of(results));
         final Response<IndexDocumentsResult> response = mock(Response.class);
         when(response.getValue()).thenReturn(batchResult);
-        when(target.uploadDocumentsWithResponse(any(), any(), any())).thenReturn(response);
+        when(target.indexDocumentsWithResponse(any(), any(), any())).thenReturn(response);
     }
 
     private static ChunkedEntry chunk(final String id) {

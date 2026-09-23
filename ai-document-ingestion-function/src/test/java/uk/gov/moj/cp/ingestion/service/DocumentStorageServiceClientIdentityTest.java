@@ -10,9 +10,10 @@ import uk.gov.moj.cp.ai.model.ChunkedEntry;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import com.azure.search.documents.SearchClient;
-import com.azure.search.documents.SearchDocument;
+import com.azure.search.documents.models.IndexDocumentsBatch;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -43,7 +44,7 @@ class DocumentStorageServiceClientIdentityTest {
     void shouldWriteClientIdColumn_whenChunkHasClientId() throws Exception {
         documentStorageService.uploadChunks(List.of(chunk(CLIENT_ID_VALUE)));
 
-        final SearchDocument uploaded = captureUploaded();
+        final Map<String, Object> uploaded = captureUploaded();
         assertThat(uploaded.containsKey(CLIENT_ID), is(true));
         assertThat(uploaded.get(CLIENT_ID), is(CLIENT_ID_VALUE));
     }
@@ -53,15 +54,14 @@ class DocumentStorageServiceClientIdentityTest {
     void shouldOmitClientIdColumn_whenChunkHasNoClientId() throws Exception {
         documentStorageService.uploadChunks(List.of(chunk(null)));
 
-        final SearchDocument uploaded = captureUploaded();
+        final Map<String, Object> uploaded = captureUploaded();
         assertThat(uploaded.containsKey(CLIENT_ID), is(false));
     }
 
-    @SuppressWarnings("unchecked")
-    private SearchDocument captureUploaded() {
-        final ArgumentCaptor<List<SearchDocument>> captor = ArgumentCaptor.forClass(List.class);
-        verify(searchClient).uploadDocuments(captor.capture());
-        return captor.getValue().get(0);
+    private Map<String, Object> captureUploaded() {
+        final ArgumentCaptor<IndexDocumentsBatch> captor = ArgumentCaptor.forClass(IndexDocumentsBatch.class);
+        verify(searchClient).indexDocuments(captor.capture());
+        return captor.getValue().getActions().get(0).getAdditionalProperties();
     }
 
     private ChunkedEntry chunk(final String clientId) {

@@ -12,6 +12,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
+import static uk.gov.moj.cp.ai.index.IndexConstants.CUSTOM_METADATA;
 
 import uk.gov.moj.cp.ai.client.AISearchClientFactory;
 import uk.gov.moj.cp.ai.index.IndexConstants;
@@ -23,11 +24,14 @@ import uk.gov.moj.cp.retrieval.service.filter.DeduplicationService;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import com.azure.search.documents.SearchClient;
+import com.azure.search.documents.models.QueryType;
 import com.azure.search.documents.models.SearchOptions;
+import com.azure.search.documents.models.SearchPagedIterable;
 import com.azure.search.documents.models.SearchResult;
-import com.azure.search.documents.util.SearchPagedIterable;
+import com.azure.search.documents.models.VectorQuery;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -93,15 +97,14 @@ class AzureAISearchServiceTest {
         final List<Float> vector = Arrays.asList(1.0f, 2.0f);
         final List<KeyValuePair> filters = List.of(new KeyValuePair("k", "v"));
         final SearchPagedIterable mockPagedIterable = mock(SearchPagedIterable.class);
-        final SearchResult mockResult = mock(SearchResult.class);
-        when(mockPagedIterable.iterator()).thenReturn(Arrays.asList(mockResult).iterator());
-        final ChunkedEntry entry = ChunkedEntry.builder().id("id").build();
-        when(mockResult.getDocument(ChunkedEntry.class)).thenReturn(entry);
-        when(mockSearchClient.search(anyString(), any(SearchOptions.class), any())).thenReturn(mockPagedIterable);
-        final List<ChunkedEntry> result = service.search(null, userQuery, vector, filters);
-        when(mockDeduplicationService.performSemanticDeduplication(anyList())).thenReturn(List.of(entry));
-        assertEquals(1, result.size());
-        assertEquals("id", result.get(0).id());
+        // v12 removes SearchResult.getDocument(Class); the raw body arrives via getAdditionalProperties.
+        final SearchResult result = searchResult(Map.of(IndexConstants.ID, "id"));
+        when(mockPagedIterable.iterator()).thenReturn(List.of(result).iterator());
+        when(mockSearchClient.search(any(SearchOptions.class))).thenReturn(mockPagedIterable);
+        final List<ChunkedEntry> results = service.search(null, userQuery, vector, filters);
+        when(mockDeduplicationService.performSemanticDeduplication(anyList())).thenReturn(results);
+        assertEquals(1, results.size());
+        assertEquals("id", results.get(0).id());
     }
 
     @Test
@@ -109,8 +112,88 @@ class AzureAISearchServiceTest {
     void throwsSearchServiceExceptionOnSearchClientFailure() {
         final List<Float> vector = Arrays.asList(1.0f, 2.0f);
         final List<KeyValuePair> filters = List.of(new KeyValuePair("k", "v"));
-        when(mockSearchClient.search(anyString(), any(SearchOptions.class), any())).thenThrow(new RuntimeException("fail"));
+        when(mockSearchClient.search(any(SearchOptions.class))).thenThrow(new RuntimeException("fail"));
         assertThrows(SearchServiceException.class, () -> service.search(null, "query", vector, filters));
+    }
+
+    @Test
+    @DisplayName("Maps the untyped result body onto ChunkedEntry, narrowing JSON numbers back to Float")
+    void mapsAdditionalPropertiesOntoChunkedEntry() throws SearchServiceException {
+        // JSON numbers deserialize as Double; ChunkedEntry.chunkVector is List<Float> and feeds the
+        // containment/MMR cosine maths, so the narrowing must survive the v11 -> v12 mapping change.
+        final SearchResult result = searchResult(Map.of(
+                IndexConstants.ID, "chunk-1",
+                IndexConstants.DOCUMENT_ID, "doc-1",
+                IndexConstants.CHUNK, "chunk text",
+                IndexConstants.DOCUMENT_FILE_NAME, "doc.pdf",
+                IndexConstants.PAGE_NUMBER, 7,
+                IndexConstants.CHUNK_INDEX, 3,
+                IndexConstants.DOCUMENT_FILE_URL, "https://example/doc.pdf",
+                IndexConstants.CHUNK_VECTOR, List.of(0.25d, -0.5d, 1.0d),
+                CUSTOM_METADATA, List.of(Map.of("key", "alpha", "value", "one"))));
+
+        final SearchPagedIterable mockPagedIterable = mock(SearchPagedIterable.class);
+        when(mockPagedIterable.iterator()).thenReturn(List.of(result).iterator());
+        when(mockSearchClient.search(any(SearchOptions.class))).thenReturn(mockPagedIterable);
+
+        final ChunkedEntry entry = service.search(
+                null, "query", List.of(1.0f), List.of(new KeyValuePair("k", "v"))).get(0);
+
+        assertEquals("chunk-1", entry.id());
+        assertEquals("doc-1", entry.documentId());
+        assertEquals("chunk text", entry.chunk());
+        assertEquals("doc.pdf", entry.documentFileName());
+        assertEquals(7, entry.pageNumber());
+        assertEquals(3, entry.chunkIndex());
+        assertEquals("https://example/doc.pdf", entry.documentFileUrl());
+        assertEquals(List.of(0.25f, -0.5f, 1.0f), entry.chunkVector());
+        assertEquals(List.of(new KeyValuePair("alpha", "one")), entry.customMetadata());
+    }
+
+    @Test
+    @DisplayName("Wires exactly one vector query on SearchOptions with the configured kNN count and vector field")
+    void searchWiresSingleVectorQueryWithConfiguredKnn() throws SearchServiceException {
+        final SearchOptions options = captureSearchOptions("query");
+
+        // v12 removes VectorSearchOptions; queries hang directly off SearchOptions.
+        final List<VectorQuery> vectorQueries = options.getVectorQueries();
+        assertEquals(1, vectorQueries.size());
+        assertEquals(50, vectorQueries.get(0).getKNearestNeighbors());
+        assertEquals(IndexConstants.CHUNK_VECTOR, vectorQueries.get(0).getFields());
+    }
+
+    @Test
+    @DisplayName("Keyword leg is unchanged: Lucene-escaped text on SearchOptions, QueryType.FULL, top = configured pool")
+    void searchCarriesEscapedQueryTextAndFullQueryType() throws SearchServiceException {
+        // v12 folds the query text into SearchOptions; the escaping must still be applied to it.
+        final SearchOptions options = captureSearchOptions("Crown (v) O'Brien");
+
+        assertThat(options.getSearchText(), is("Crown \\(v\\) O'Brien"));
+        assertThat(options.getQueryType(), is(QueryType.FULL));
+        assertEquals(50, options.getTop());
+    }
+
+    @Test
+    @DisplayName("Select list is unchanged and still selects the chunk vector")
+    void searchSelectsTheConfiguredColumns() throws SearchServiceException {
+        final SearchOptions options = captureSearchOptions("query");
+
+        assertThat(options.getSelect(), is(List.of(service.getColumnsToRetrieve(null))));
+    }
+
+    private SearchOptions captureSearchOptions(final String userQuery) throws SearchServiceException {
+        final SearchPagedIterable mockPagedIterable = mock(SearchPagedIterable.class);
+        when(mockPagedIterable.iterator()).thenReturn(Collections.<SearchResult>emptyList().iterator());
+        final ArgumentCaptor<SearchOptions> optionsCaptor = ArgumentCaptor.forClass(SearchOptions.class);
+        when(mockSearchClient.search(optionsCaptor.capture())).thenReturn(mockPagedIterable);
+
+        service.search(null, userQuery, List.of(1.0f, 2.0f), List.of(new KeyValuePair("k", "v")));
+
+        return optionsCaptor.getValue();
+    }
+
+    private static SearchResult searchResult(final Map<String, Object> document) {
+        return new SearchResult().setAdditionalProperties(document);
     }
 
     @Test
@@ -303,7 +386,7 @@ class AzureAISearchServiceTest {
         when(mockPagedIterable.iterator()).thenReturn(Collections.<SearchResult>emptyList().iterator());
 
         final ArgumentCaptor<SearchOptions> optionsCaptor = ArgumentCaptor.forClass(SearchOptions.class);
-        when(mockSearchClient.search(anyString(), optionsCaptor.capture(), any())).thenReturn(mockPagedIterable);
+        when(mockSearchClient.search(optionsCaptor.capture())).thenReturn(mockPagedIterable);
 
         service.search("client-a", "query", vector, filters);
 

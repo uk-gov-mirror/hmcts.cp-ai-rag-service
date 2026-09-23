@@ -3,7 +3,6 @@ package uk.gov.moj.cp.migration.index;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
@@ -13,6 +12,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import uk.gov.moj.cp.ai.index.SearchFieldMapper;
 import uk.gov.moj.cp.ai.model.ChunkedEntry;
 import uk.gov.moj.cp.ai.model.KeyValuePair;
 
@@ -20,8 +20,10 @@ import java.util.Collections;
 import java.util.List;
 
 import com.azure.search.documents.SearchClient;
+import com.azure.search.documents.models.SearchOptions;
+import com.azure.search.documents.models.SearchPagedIterable;
+import com.azure.search.documents.models.SearchPagedResponse;
 import com.azure.search.documents.models.SearchResult;
-import com.azure.search.documents.util.SearchPagedIterable;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
@@ -115,21 +117,25 @@ class IndexCopierTest {
     @Test
     void readPageAppliesTheShardFilterAndMapsResultsToChunkedEntries() {
         final SearchClient source = mock(SearchClient.class);
-        final SearchResult r1 = mock(SearchResult.class);
-        final SearchResult r2 = mock(SearchResult.class);
         final ChunkedEntry c1 = chunk("id-a");
         final ChunkedEntry c2 = chunk("id-b");
-        when(r1.getDocument(ChunkedEntry.class)).thenReturn(c1);
-        when(r2.getDocument(ChunkedEntry.class)).thenReturn(c2);
+        // v12 removes SearchResult.getDocument(Class); the raw document body arrives untyped.
         final SearchPagedIterable results = mock(SearchPagedIterable.class);
-        when(results.iterator()).thenReturn(List.of(r1, r2).iterator());
-        when(source.search(any(), any(), any())).thenReturn(results);
+        when(results.iterator()).thenReturn(List.of(searchResult(c1), searchResult(c2)).iterator());
+        final ArgumentCaptor<SearchOptions> options = ArgumentCaptor.forClass(SearchOptions.class);
+        when(source.search(options.capture())).thenReturn(results);
 
         final List<ChunkedEntry> page =
                 new IndexCopier(source, mock(DocumentUploader.class), 500, 1, 0).readPage(new Shard("a", "b", null), "a5");
 
         assertThat(page).containsExactly(c1, c2);
-        verify(source).search(eq("*"), any(), any()); // shard-bounded keyset query issued
+        // shard-bounded keyset query issued; v12 carries the query text on the options
+        assertThat(options.getValue().getSearchText()).isEqualTo("*");
+        assertThat(options.getValue().getFilter()).isNotNull();
+    }
+
+    private static SearchResult searchResult(final ChunkedEntry entry) {
+        return new SearchResult().setAdditionalProperties(SearchFieldMapper.toSearchDocument(entry));
     }
 
     @Test
@@ -145,16 +151,19 @@ class IndexCopierTest {
     @Test
     void copyAllDocumentsCountsAlreadyProcessedDocsWhenResumingASingleWorkerRun() {
         final SearchClient source = mock(SearchClient.class);
+        // v12 moves the total count off the iterable onto the page.
+        final SearchPagedResponse countPage = mock(SearchPagedResponse.class);
+        when(countPage.getCount()).thenReturn(42L);
         final SearchPagedIterable countResult = mock(SearchPagedIterable.class);
-        when(countResult.getTotalCount()).thenReturn(42L);
-        when(source.search(any(), any(), any())).thenReturn(countResult);
+        when(countResult.iterableByPage()).thenReturn(List.of(countPage));
+        when(source.search(any())).thenReturn(countResult);
         final IndexCopier copier = spy(new IndexCopier(source, mock(DocumentUploader.class), 2, 1, 0));
         doReturn(List.of()).when(copier).readPage(any(), any()); // nothing left to copy from the cursor
 
         final long submitted = copier.copyAllDocuments("cursor-x");
 
         assertThat(submitted).isZero();
-        verify(source).search(any(), any(), any()); // resume count query executed (countProcessedBefore)
+        verify(source).search(any()); // resume count query executed (countProcessedBefore)
     }
 
     @Test

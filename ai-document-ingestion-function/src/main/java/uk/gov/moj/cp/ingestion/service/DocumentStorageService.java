@@ -3,22 +3,17 @@ package uk.gov.moj.cp.ingestion.service;
 import static java.lang.String.format;
 import static java.util.Objects.isNull;
 import static java.util.stream.Collectors.joining;
-import static uk.gov.moj.cp.ai.index.IndexConstants.CHUNK;
-import static uk.gov.moj.cp.ai.index.IndexConstants.CHUNK_INDEX;
-import static uk.gov.moj.cp.ai.index.IndexConstants.CHUNK_VECTOR;
 import static uk.gov.moj.cp.ai.index.IndexConstants.CLIENT_ID;
 import static uk.gov.moj.cp.ai.index.IndexConstants.CUSTOM_METADATA;
-import static uk.gov.moj.cp.ai.index.IndexConstants.DOCUMENT_FILE_NAME;
-import static uk.gov.moj.cp.ai.index.IndexConstants.DOCUMENT_FILE_URL;
 import static uk.gov.moj.cp.ai.index.IndexConstants.DOCUMENT_ID;
 import static uk.gov.moj.cp.ai.index.IndexConstants.FALSE_VALUE;
 import static uk.gov.moj.cp.ai.index.IndexConstants.ID;
 import static uk.gov.moj.cp.ai.index.IndexConstants.IS_ACTIVE;
-import static uk.gov.moj.cp.ai.index.IndexConstants.PAGE_NUMBER;
 import static uk.gov.moj.cp.ai.util.StringUtil.escapeODataStringLiteral;
 import static uk.gov.moj.cp.ai.util.StringUtil.isNullOrEmpty;
 
 import uk.gov.moj.cp.ai.client.AISearchClientFactory;
+import uk.gov.moj.cp.ai.index.SearchFieldMapper;
 import uk.gov.moj.cp.ai.model.ChunkedEntry;
 import uk.gov.moj.cp.ingestion.exception.DocumentProcessingException;
 
@@ -27,12 +22,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import com.azure.core.util.Context;
 import com.azure.search.documents.SearchClient;
-import com.azure.search.documents.SearchDocument;
+import com.azure.search.documents.models.IndexAction;
+import com.azure.search.documents.models.IndexActionType;
+import com.azure.search.documents.models.IndexDocumentsBatch;
 import com.azure.search.documents.models.SearchOptions;
+import com.azure.search.documents.models.SearchPagedIterable;
 import com.azure.search.documents.models.SearchResult;
-import com.azure.search.documents.util.SearchPagedIterable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -70,7 +66,7 @@ public class DocumentStorageService {
         LOGGER.info("Uploading {} chunks to Azure Search Index: {}", chunks.size(), indexName);
 
         try {
-            List<SearchDocument> batch = new ArrayList<>(chunks.size());
+            final List<IndexAction> actions = new ArrayList<>(chunks.size());
 
             for (ChunkedEntry chunkedEntry : chunks) {
                 if (chunkedEntry.chunkVector() == null || chunkedEntry.chunkVector().size() != VECTOR_DIMENSIONS) {
@@ -80,28 +76,15 @@ public class DocumentStorageService {
                     continue;
                 }
 
-                SearchDocument searchDocument = new SearchDocument();
-                // Use exact field names from vector database schema
-                searchDocument.put(ID, chunkedEntry.id());
-                searchDocument.put(CHUNK, chunkedEntry.chunk());
-                searchDocument.put(CHUNK_VECTOR, chunkedEntry.chunkVector());
-                searchDocument.put(DOCUMENT_FILE_NAME, chunkedEntry.documentFileName());
-                searchDocument.put(DOCUMENT_ID, chunkedEntry.documentId());
-                searchDocument.put(PAGE_NUMBER, chunkedEntry.pageNumber());
-                searchDocument.put(CHUNK_INDEX, chunkedEntry.chunkIndex());
-                searchDocument.put(DOCUMENT_FILE_URL, chunkedEntry.documentFileUrl());
-                searchDocument.put(CUSTOM_METADATA, chunkedEntry.customMetadata());
-                // Emit the client-scoping column only when the chunk carries one — writing it
-                // unconditionally would break indexing against a live index that lacks the field.
-                if (!isNullOrEmpty(chunkedEntry.clientId())) {
-                    searchDocument.put(CLIENT_ID, chunkedEntry.clientId());
-                }
-
-                batch.add(searchDocument);
+                // SearchFieldMapper owns the field names and, critically, converts customMetadata records
+                // into plain maps — the untyped document body would otherwise stringify them.
+                actions.add(new IndexAction()
+                        .setActionType(IndexActionType.UPLOAD)
+                        .setAdditionalProperties(SearchFieldMapper.toSearchDocument(chunkedEntry)));
             }
 
-            if (!batch.isEmpty()) {
-                searchClient.uploadDocuments(batch);
+            if (!actions.isEmpty()) {
+                searchClient.indexDocuments(new IndexDocumentsBatch(actions));
                 LOGGER.info("Batch upload successful for index {}", indexName);
             } else {
                 LOGGER.warn("No valid chunks found to upload for index {}", indexName);
@@ -116,26 +99,27 @@ public class DocumentStorageService {
 
     @SuppressWarnings("unchecked")
     public void markDocumentsInActive(final String clientId, final List<String> supersededDocuments) {
-        final List<SearchDocument> allUpdates = new ArrayList<>();
+        final List<IndexAction> allUpdates = new ArrayList<>();
 
         final SearchPagedIterable searchResults = getSearchResults(clientId, supersededDocuments);
 
         for (SearchResult result : searchResults) {
-            final SearchDocument searchDocument = result.getDocument(SearchDocument.class);
+            final Map<String, Object> searchDocument = result.getAdditionalProperties();
 
+            // Copied, not appended to in place: the retrieved body may be immutable.
             final List<Map<String, String>> customMetadata = searchDocument.containsKey(CUSTOM_METADATA)
-                    ? (List<Map<String, String>>) searchDocument.get(CUSTOM_METADATA)
+                    ? new ArrayList<>((List<Map<String, String>>) searchDocument.get(CUSTOM_METADATA))
                     : new ArrayList<>();
             Map<String, String> isActiveKeyValue = new HashMap<>();
             isActiveKeyValue.put("key", IS_ACTIVE);
             isActiveKeyValue.put("value", FALSE_VALUE);
             customMetadata.add(isActiveKeyValue);
 
-            allUpdates.add(getSearchDocument(searchDocument, customMetadata));
+            allUpdates.add(mergeAction(searchDocument, customMetadata));
         }
 
         if (!allUpdates.isEmpty()) {
-            searchClient.mergeDocuments(allUpdates);
+            searchClient.indexDocuments(new IndexDocumentsBatch(allUpdates));
         }
     }
 
@@ -154,17 +138,21 @@ public class DocumentStorageService {
         LOGGER.info("Find search results matching filter criteria: {}", filter);
 
         final SearchOptions options = new SearchOptions()
+                .setSearchText("*")
                 .setFilter(filter)
-                .setSelect(format("%s, %s", ID, CUSTOM_METADATA));
+                .setSelect(ID, CUSTOM_METADATA);
 
-        return searchClient.search("*", options, Context.NONE);
+        return searchClient.search(options);
     }
 
-    private static SearchDocument getSearchDocument(final SearchDocument doc, final List<Map<String, String>> metadata) {
-        final SearchDocument updateDoc = new SearchDocument();
-        updateDoc.put(ID, doc.get(ID));
-        updateDoc.put(CUSTOM_METADATA, metadata);
-        return updateDoc;
+    /**
+     * A partial update: the action names only the key and the metadata collection, so every other field is
+     * left untouched service-side. Naming any other field here would overwrite it with this projection.
+     */
+    private static IndexAction mergeAction(final Map<String, Object> doc, final List<Map<String, String>> metadata) {
+        return new IndexAction()
+                .setActionType(IndexActionType.MERGE)
+                .setAdditionalProperties(Map.of(ID, doc.get(ID), CUSTOM_METADATA, metadata));
     }
 
 }

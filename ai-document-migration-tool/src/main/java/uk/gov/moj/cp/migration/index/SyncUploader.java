@@ -1,24 +1,16 @@
 package uk.gov.moj.cp.migration.index;
 
-import static uk.gov.moj.cp.ai.index.IndexConstants.CHUNK;
-import static uk.gov.moj.cp.ai.index.IndexConstants.CHUNK_INDEX;
-import static uk.gov.moj.cp.ai.index.IndexConstants.CHUNK_VECTOR;
-import static uk.gov.moj.cp.ai.index.IndexConstants.CUSTOM_METADATA;
-import static uk.gov.moj.cp.ai.index.IndexConstants.DOCUMENT_FILE_NAME;
-import static uk.gov.moj.cp.ai.index.IndexConstants.DOCUMENT_FILE_URL;
-import static uk.gov.moj.cp.ai.index.IndexConstants.DOCUMENT_ID;
-import static uk.gov.moj.cp.ai.index.IndexConstants.ID;
-import static uk.gov.moj.cp.ai.index.IndexConstants.PAGE_NUMBER;
-
+import uk.gov.moj.cp.ai.index.SearchFieldMapper;
 import uk.gov.moj.cp.ai.model.ChunkedEntry;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
-import com.azure.core.util.Context;
 import com.azure.search.documents.SearchClient;
-import com.azure.search.documents.SearchDocument;
+import com.azure.search.documents.models.IndexAction;
+import com.azure.search.documents.models.IndexActionType;
+import com.azure.search.documents.models.IndexDocumentsBatch;
 import com.azure.search.documents.models.IndexDocumentsOptions;
 import com.azure.search.documents.models.IndexingResult;
 import org.slf4j.Logger;
@@ -47,14 +39,16 @@ final class SyncUploader implements DocumentUploader {
 
     @Override
     public void upload(final List<ChunkedEntry> docs) {
-        final List<SearchDocument> batch = new ArrayList<>(docs.size());
+        final List<IndexAction> actions = new ArrayList<>(docs.size());
         for (final ChunkedEntry entry : docs) {
-            batch.add(toSearchDocument(entry));
+            actions.add(new IndexAction()
+                    .setActionType(IndexActionType.UPLOAD)
+                    .setAdditionalProperties(SearchFieldMapper.toSearchDocument(entry)));
         }
         // setThrowOnAnyError(false): per-doc failures are reported in the results (counted, non-fatal) rather
         // than throwing, mirroring the buffered sender's onActionError handling.
-        final var result = target.uploadDocumentsWithResponse(
-                batch, new IndexDocumentsOptions().setThrowOnAnyError(false), Context.NONE).getValue();
+        final var result = target.indexDocumentsWithResponse(new IndexDocumentsBatch(actions),
+                new IndexDocumentsOptions().setThrowOnAnyError(false), null).getValue();
         for (final IndexingResult indexed : result.getResults()) {
             if (indexed.isSucceeded()) {
                 succeeded.incrementAndGet();
@@ -69,19 +63,5 @@ final class SyncUploader implements DocumentUploader {
     @Override
     public void close() {
         // Nothing buffered — each page was uploaded synchronously.
-    }
-
-    private static SearchDocument toSearchDocument(final ChunkedEntry entry) {
-        final SearchDocument document = new SearchDocument();
-        document.put(ID, entry.id());
-        document.put(CHUNK, entry.chunk());
-        document.put(CHUNK_VECTOR, entry.chunkVector());
-        document.put(DOCUMENT_FILE_NAME, entry.documentFileName());
-        document.put(DOCUMENT_ID, entry.documentId());
-        document.put(PAGE_NUMBER, entry.pageNumber());
-        document.put(CHUNK_INDEX, entry.chunkIndex());
-        document.put(DOCUMENT_FILE_URL, entry.documentFileUrl());
-        document.put(CUSTOM_METADATA, entry.customMetadata());
-        return document;
     }
 }
