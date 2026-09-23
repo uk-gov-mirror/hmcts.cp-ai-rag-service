@@ -1,5 +1,6 @@
 package uk.gov.moj.cp.orchestrator.util;
 
+import uk.gov.moj.cp.ai.client.AISearchClientFactory;
 import static uk.gov.moj.cp.ai.util.CredentialUtil.getCredentialInstance;
 
 import java.io.InputStream;
@@ -54,7 +55,7 @@ public class IndexUtil {
                 // createOrUpdateIndex round-trips the schema JSON, so the api-version is pinned to the one
                 // the production indexes are built under — otherwise a newer default could introduce
                 // api-version-only defaults into the per-run test index.
-                .serviceVersion(SearchServiceVersion.V2025_09_01)
+                .serviceVersion(AISearchClientFactory.SERVICE_VERSION)
                 .buildClient();
     }
 

@@ -19,11 +19,13 @@ public class AISearchClientFactory {
     private static final Logger LOGGER = LoggerFactory.getLogger(AISearchClientFactory.class);
 
     /**
-     * REST api-version pinned rather than left on the SDK default. The SDK's default moved on with the
-     * 11 -> 12 upgrade, so pinning keeps the wire contract identical to the one the live indexes were
-     * built and queried under; bumping it is a separate, revertible change.
+     * The single service api-version pin for every Search client in the repo (functions, migration
+     * tool, integration tests). Pinned rather than left on the SDK default: the default moved to
+     * V2026_04_01 with the 11 -> 12 upgrade, and pinning the version v11.8.1 spoke keeps the wire
+     * contract identical to the one the live indexes were built and queried under. Bump here — and
+     * only here — as its own separate, revertible change.
      */
-    private static final SearchServiceVersion SERVICE_VERSION = SearchServiceVersion.V2025_09_01;
+    public static final SearchServiceVersion SERVICE_VERSION = SearchServiceVersion.V2025_09_01;
 
     private static final ConcurrentHashMap<String, SearchClient> AI_SEARCH_CLIENT_CACHE = new ConcurrentHashMap<>();
     private static final TokenCredential SHARED_CREDENTIAL = getCredentialInstance();

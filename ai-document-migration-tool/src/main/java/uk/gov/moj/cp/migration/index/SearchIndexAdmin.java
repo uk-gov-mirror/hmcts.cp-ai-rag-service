@@ -1,5 +1,7 @@
 package uk.gov.moj.cp.migration.index;
 
+import static uk.gov.moj.cp.ai.client.AISearchClientFactory.SERVICE_VERSION;
+
 import static java.lang.String.format;
 import static uk.gov.moj.cp.ai.index.IndexConstants.ID;
 
@@ -43,7 +45,6 @@ final class SearchIndexAdmin {
      * REST api-version pinned to the one the source/target indexes were built and queried under, so the
      * schema round-trip through {@code createOrUpdateIndex} cannot pick up newer api-version defaults.
      */
-    private static final SearchServiceVersion SERVICE_VERSION = SearchServiceVersion.V2025_09_01;
 
     static SearchIndexClient indexClient(final String endpoint) {
         return new SearchIndexClientBuilder()
