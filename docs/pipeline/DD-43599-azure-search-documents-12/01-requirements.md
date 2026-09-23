@@ -1,4 +1,4 @@
-# DD-43599 — Requirements: migrate `azure-search-documents` 11.8.1 → 12.0.2
+# DD-43599 — Requirements: migrate `azure-search-documents` 11.8.1 → 12.x (BOM-managed; 12.0.1 at time of merge)
 
 ## Purpose
 The parent `pom.xml` pins `com.azure:azure-search-documents` to `11.8.1`, overriding `azure-sdk-bom` 1.3.8
@@ -53,7 +53,8 @@ index-schema change. Maintenance/currency only.
 - Prompt, citation guard, idempotency and scoring paths.
 
 ## Acceptance criteria
-- **AC-1** Pin removed; resolved `azure-search-documents` is `12.0.2` in every module (`mvn dependency:tree`
+- **AC-1** Override removed; resolved `azure-search-documents` is the BOM-managed version (12.0.1 under
+  azure-sdk-bom 1.3.8) in every module (`mvn dependency:tree`
   shows one version, no omitted-for-conflict entries).
 - **AC-2** `mvn clean verify` passes for all modules.
 - **AC-3** Unit tests assert the same filter expressions as on 11.8.1 — apostrophe escaping, `is_active`
@@ -63,17 +64,17 @@ index-schema change. Maintenance/currency only.
 - **AC-6** Chunks with a null or wrong-size vector are still skipped, not uploaded, not fatal.
 - **AC-7** Stale pin rationale comment removed/replaced; Renovate issue #1 closes on merge.
 
-## Open questions
-1. Repin explicitly to `12.0.2`, or drop the pin and inherit `12.0.1` from `azure-sdk-bom` 1.3.8? — Owner: TBD
-2. Is `ai-document-migration-tool` in scope here or migrated separately? It is the heaviest user of removed
-   APIs (`SearchIndexingBufferedSender`). — Owner: TBD
-3. Do v12 merge semantics without `SearchDocument` require a different soft-delete approach? — Owner: TBD
-
-## Decisions (orchestration, 23 Sep 2026)
-1. **Repin explicitly to 12.0.2** — Renovate's target; azure-sdk-bom 1.3.8 manages only 12.0.1. Keep the
-   dependencyManagement entry with a refreshed comment (pin now means "ahead of the BOM", not "held back").
-2. **`ai-document-migration-tool` and `ai-service-orchestration-test/IndexUtil` are in scope** — one reactor,
-   one managed version; they cannot stay on v11 once dependencyManagement moves. Single PR migrates all consumers.
-3. **Soft-delete merge semantics** — to be answered concretely in the design stage: map `mergeDocuments` +
-   untyped `SearchDocument` to the v12 merge operation shape, preserving partial-update behaviour (only
-   `is_active` flipped, all other fields untouched).
+## Open questions — resolved (owner: Mahesh Subramanian / orchestration, 23 Sep 2026)
+1. *Pin 12.0.2 or inherit the BOM's 12.0.1?* → **Inherit the BOM's 12.0.1; no override at all.**
+   Initially repinned to 12.0.2 (Renovate's target), then reversed on review: 12.0.2 differs from
+   12.0.1 only by dependency-floor bumps that azure-sdk-bom pins away in this tree, and an explicit
+   version would silently hold the artifact back once a future BOM manages a newer patch. The BOM is
+   the single owner of the version. Renovate's 12.0.2 dashboard line stays unticked until a BOM bump
+   clears it — deliberate.
+2. *Is `ai-document-migration-tool` in scope?* → **Yes, plus `ai-service-orchestration-test/IndexUtil`** —
+   one reactor, one managed version; they cannot stay on v11 once dependencyManagement moves. Single PR
+   migrates all consumers.
+3. *Do v12 merge semantics need a different soft-delete approach?* → **No.** Answered concretely in the
+   design (03-design.md §2): `IndexAction(MERGE).setAdditionalProperties(...)` emits a wire body
+   byte-identical to v11's `mergeDocuments`, verified by decompiling `IndexAction.toJson`. Partial-update
+   semantics preserved by sending only `{id, customMetadata}`.

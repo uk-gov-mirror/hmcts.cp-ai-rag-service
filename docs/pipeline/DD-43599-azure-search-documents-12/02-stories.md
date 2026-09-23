@@ -1,8 +1,8 @@
-# [DD-43599] Migrate azure-search-documents 11.8.1 to 12.0.2
+# [DD-43599] Migrate azure-search-documents 11.8.1 to 12.x (BOM-managed)
 
 ## User story
 As a **platform engineer maintaining cp-ai-rag-service**,
-I want **the pinned `azure-search-documents` dependency repinned to 12.0.2 with all call sites rewritten onto the v12 API**,
+I want **the `azure-search-documents` version override removed (BOM-managed 12.x) with all call sites rewritten onto the v12 API**,
 so that **the reactor tracks the current Azure SDK BOM with zero behavioural, contract or index-schema change**.
 
 ## Background
@@ -12,7 +12,7 @@ The 11.8.1 pin blocks Renovate dashboard issue #1. v12 removes `SearchDocument`,
 one managed version, single PR (per orchestration decisions).
 
 ## Acceptance criteria
-- [ ] AC-001: Given the parent POM, when `mvn dependency:tree` is run across all modules, then `azure-search-documents:12.0.2` resolves as the single version with no omitted-for-conflict entries.
+- [x] AC-001: Given the parent POM, when `mvn dependency:tree` is run across all modules, then the single BOM-managed `azure-search-documents` version (12.0.1 under azure-sdk-bom 1.3.8) resolves with no omitted-for-conflict entries.
 - [ ] AC-002: Given a retrieval query, when hybrid search executes, then it still issues one `chunkVector` kNN query plus the Lucene-escaped keyword query at `QueryType.FULL`, unchanged.
 - [ ] AC-003: Given filter generation, when unit tests run, then OData filters (apostrophe escaping, `customMetadata/any(m: ...)`, `is_active` trailer, client-scoped and unscoped `client_id` variants) are byte-for-byte identical to 11.8.1.
 - [ ] AC-004: Given a supersede operation, when chunks are merged, then only `is_active` flips to `false` in `customMetadata`, with id + metadata only sent, and all other fields untouched.

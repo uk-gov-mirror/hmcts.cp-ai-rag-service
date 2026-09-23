@@ -1,5 +1,9 @@
 # DD-43599 — Design: `azure-search-documents` 11.8.1 → 12.0.2
 
+> **Outcome note (post-review):** the implementation ultimately inherits the BOM-managed **12.0.1**
+> rather than pinning 12.0.2 — the two differ only by dependency-floor bumps neutralised by
+> azure-sdk-bom, so every API claim below (verified against the 12.0.2 jar) holds identically.
+
 ## Summary
 v12 is a code-generation rewrite: the untyped `SearchDocument` map type and the typed
 `uploadDocuments`/`mergeDocuments`/`getDocument(Class)` convenience layer are gone, replaced by an
