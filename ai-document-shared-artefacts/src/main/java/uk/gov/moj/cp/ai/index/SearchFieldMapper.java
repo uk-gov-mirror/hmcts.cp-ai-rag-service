@@ -80,7 +80,9 @@ public final class SearchFieldMapper {
      * absent from the projection are left null.
      */
     public static ChunkedEntry toChunkedEntry(final Map<String, Object> document) {
-        return OBJECT_MAPPER.convertValue(document, ChunkedEntry.class);
+        // getAdditionalProperties() is null when a hit carries no document fields (the map is only
+        // lazily created during deserialisation) — v11's getDocument() returned an empty document there.
+        return OBJECT_MAPPER.convertValue(document == null ? Map.of() : document, ChunkedEntry.class);
     }
 
     /** {@code customMetadata} as plain maps — see the class comment for why the record cannot be passed through. */
@@ -90,7 +92,12 @@ public final class SearchFieldMapper {
         }
         final List<Map<String, String>> maps = new ArrayList<>(customMetadata.size());
         for (final KeyValuePair pair : customMetadata) {
-            maps.add(Map.of("key", pair.key(), "value", pair.value()));
+            // Not Map.of: null values are representable in already-indexed documents, and the
+            // migration tool round-trips them.
+            final Map<String, String> entry = new LinkedHashMap<>(2);
+            entry.put("key", pair.key());
+            entry.put("value", pair.value());
+            maps.add(entry);
         }
         return maps;
     }

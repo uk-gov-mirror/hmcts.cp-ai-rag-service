@@ -105,6 +105,9 @@ public class DocumentStorageService {
 
         for (SearchResult result : searchResults) {
             final Map<String, Object> searchDocument = result.getAdditionalProperties();
+            if (searchDocument == null) {
+                continue; // a hit with no document fields cannot be merged (no id to address)
+            }
 
             // Copied, not appended to in place: the retrieved body may be immutable.
             final List<Map<String, String>> customMetadata = searchDocument.containsKey(CUSTOM_METADATA)
