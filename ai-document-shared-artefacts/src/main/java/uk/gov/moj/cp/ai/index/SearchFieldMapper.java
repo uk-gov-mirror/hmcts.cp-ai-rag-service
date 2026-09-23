@@ -47,6 +47,10 @@ public final class SearchFieldMapper {
      * Lenient on purpose: a read is routinely a partial {@code $select} projection, and a hit may carry
      * service-side fields the record does not model.
      */
+    // Deliberately NOT ObjectMapperFactory.getObjectMapper(): that instance is a shared singleton
+    // (queue payloads, chat responses, citations) with FAIL_ON_UNKNOWN_PROPERTIES at its strict
+    // default. This mapper must be lenient, and ObjectMapper config is global per instance, so
+    // reusing or reconfiguring the shared one would loosen parsing for every other consumer.
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
